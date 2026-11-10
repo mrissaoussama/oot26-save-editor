@@ -13,6 +13,7 @@ import webbrowser
 
 import ootrefs
 import ootstats
+import ootdrops
 
 APP_NAME = 'OoT26 Save Editor'
 APP_VERSION = '1.0.0'
@@ -30,6 +31,17 @@ def stats_intro():
             'Weapons & items = base damage, guard break, range; Projectiles = arrows, fireballs, beams.\n\n'
             'Units: 4 life = 1 heart (the save uses 16 = 1 heart). Damage = base attack x multiplier. Distances in metres, times in frames.\n'
             'Names shown as #number are hashes whose original text is not in the game data.')
+
+
+def drops_intro():
+    if not ootdrops.available(): return NOT_BUILT
+    return ('Where items drop from: chests, pots, grass, rocks, enemies, and the drop tables they roll on.\n\n'
+            'Show: Items = search an item (e.g. "heart", "rupee", "arrows", "mirror") to see what drops it, where and when;\n'
+            'Sources = an enemy or object and what it drops on each map; Drop tables = one table and who uses it;\n'
+            'Maps = every fixed and random drop on one map.\n\n'
+            'Chance = share of one roll. "Low-resource boost" raises a chance when Link is low on that item.\n'
+            'Arrows / Deku Seeds: the same drop gives arrows as adult and seeds as child.\n'
+            'Chest flags (IsTreasureBoxOpen.<id>) can be edited in the Chests tab.')
 
 
 def data_info():
@@ -924,6 +936,8 @@ class App(tk.Tk):
         self.explorer = Explorer(self.nb, self); self.nb.add(self.explorer, text='Triggers & events')
         self.stats = Explorer(self.nb, self, src=ootstats, kind='Enemies', raw_text='All parameters', intro=stats_intro)
         self.nb.add(self.stats, text='Enemies & Link stats')
+        self.drops = Explorer(self.nb, self, src=ootdrops, kind='Items', raw_text='Raw data', intro=drops_intro)
+        self.nb.add(self.drops, text='Drops')
         self.protocol('WM_DELETE_WINDOW', self.quit_app)
         self.bind('<Control-s>', lambda e: self.write()); self.bind('<Control-o>', lambda e: self.open())
         self.bind('<Control-f>', self.find)
@@ -987,8 +1001,10 @@ class App(tk.Tk):
         ootrefs._cache.clear()
         ootstats._cache.clear()
         ootstats._CATCH = None
+        ootdrops._cache.clear()
         self.explorer.welcome()
         self.stats.welcome()
+        self.drops.welcome()
         self.spawn.reload()
 
     def find(self, e=None):

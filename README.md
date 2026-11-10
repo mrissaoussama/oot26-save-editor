@@ -15,6 +15,7 @@ With reference data built from a romfs dump:
 - Triggers & events: what sets, checks or triggers a flag, story step, event or cutscene.
 - Enemies & Link stats: health, damage multipliers, attacks, Link's movement parameters.
 - Spawn points for every map.
+- Drops: what drops an item, where, from which drop table and under which conditions.
 
 ## Requirements
 

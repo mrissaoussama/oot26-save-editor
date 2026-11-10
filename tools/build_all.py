@@ -4,7 +4,7 @@ import datetime, glob, json, os, re, subprocess, sys
 from common import HERE, romfs_path
 
 STEPS = ['build_event_index.py', 'build_logic_dump.py', 'build_scene_index.py', 'build_actor_stats.py',
-         'build_spawns.py', 'build_catchable.py', 'build_item_events.py']
+         'build_spawns.py', 'build_catchable.py', 'build_drops.py', 'build_item_events.py']
 BUILD_IDS = {'33FA6C2C23848282A77E8B88A0A93F4887C55920': '1.0.0', 'E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348': '1.1.1'}
 
 

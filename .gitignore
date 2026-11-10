@@ -13,5 +13,6 @@ logic_rules.json
 actor_stats.json
 spawns.json
 catchable.json
+drops.json
 ITEM_EVENTS.md
 data_info.json
