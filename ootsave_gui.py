@@ -6,16 +6,35 @@ import struct
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import subprocess
+import threading
+import queue
+import webbrowser
+
 import ootrefs
 import ootstats
 
-STATS_INTRO = ('Game balance values read from the romfs actor packs (read only: changing them needs a romfs mod).\n\n'
-               'Show: Link = health, jump heights, roll/swim speeds, healing, attack multipliers, weapon damage;\n'
-               'Enemies / Bosses = health, hits needed per sword, damage they take per type, damage their attacks do;\n'
-               'Weapons & items = base damage, guard break, range; Projectiles = arrows, fireballs, beams.\n\n'
-               'Units: 4 life = 1 heart (the save uses 16 = 1 heart). Damage = base attack x multiplier. Distances in metres, times in frames.\n'
-               'Names shown as #number are hashes whose original text is not in the game data.'
-               if ootstats.available() else 'Stats not built. From a romfs dump run:\n  python tools/build_all.py <romfs folder>')
+APP_NAME = 'OoT26 Save Editor'
+APP_VERSION = '1.0.0'
+APP_AUTHOR = 'mrissaoussama'
+APP_URL = 'https://github.com/mrissaoussama/oot26-save-editor'
+HERE = os.path.dirname(os.path.abspath(__file__))
+NOT_BUILT = 'Reference data not built. Use "Build reference data…" with a romfs dump, or run:\n  python tools/build_all.py <romfs folder>'
+
+
+def stats_intro():
+    if not ootstats.available(): return NOT_BUILT
+    return ('Game balance values read from the romfs actor packs (read only: changing them needs a romfs mod).\n\n'
+            'Show: Link = health, jump heights, roll/swim speeds, healing, attack multipliers, weapon damage;\n'
+            'Enemies / Bosses = health, hits needed per sword, damage they take per type, damage their attacks do;\n'
+            'Weapons & items = base damage, guard break, range; Projectiles = arrows, fireballs, beams.\n\n'
+            'Units: 4 life = 1 heart (the save uses 16 = 1 heart). Damage = base attack x multiplier. Distances in metres, times in frames.\n'
+            'Names shown as #number are hashes whose original text is not in the game data.')
+
+
+def data_info():
+    try: return json.load(open(os.path.join(HERE, 'data_info.json'), encoding='utf8'))
+    except (OSError, ValueError): return {}
 
 from ootcore import (ACTOR, BKEY, BY_NAME, EDITABLE, META, NAMES, Save, caption_info, diff,
                      enum_choices, name, storage)
@@ -484,6 +503,10 @@ class Explorer(ttk.Frame):
         ttk.Checkbutton(bar, text=raw_text, variable=self.raw,
                         command=lambda: self.history and self.show(self.history[-1], push=False)).pack(side='left', padx=8)
         ttk.Label(bar, text='double-click a name in the report to open it   Ctrl+F find in the report', foreground='#777').pack(side='left', padx=6)
+        self.intro = intro
+        self.buildbar = ttk.Frame(self)
+        ttk.Label(self.buildbar, text='Reference data not built.', foreground='#a33').pack(side='left', padx=(4, 8))
+        ttk.Button(self.buildbar, text='Build reference data…', command=app.build_data).pack(side='left')
         # Find bar (Ctrl+F): highlights every match in the report, Enter / Shift+Enter next / previous, Esc closes.
         self.findbar = ttk.Frame(self)
         ttk.Label(self.findbar, text='Find').pack(side='left', padx=(4, 2))
@@ -516,11 +539,17 @@ class Explorer(ttk.Frame):
         self.txt.tag_configure('found_cur', background='#ff9f40')
         self.txt.bind('<Control-f>', lambda e: self.find_open())
         self.txt.bind('<Double-1>', self.follow)
-        if intro is not None:
-            if src.available(): self.after(100, self.suggest)
-            self.put(intro)
-        elif not ootrefs.available():
-            self.put('Reference data not built. From a romfs dump run:\n  python tools/build_all.py <romfs folder>')
+        self.welcome()
+
+    def welcome(self):
+        """Start text; shows the build bar while the reference data is missing."""
+        if self.src.available(): self.buildbar.pack_forget()
+        elif not self.buildbar.winfo_manager(): self.buildbar.pack(fill='x', before=self.pw, pady=(0, 4))
+        if self.intro is not None:
+            if self.src.available(): self.after(100, self.suggest)
+            self.put(self.intro() if callable(self.intro) else self.intro)
+        elif not self.src.available():
+            self.put(NOT_BUILT)
         else:
             self.after(100, self.suggest)
             self.put('Pick something from the list on the left, or search (several words allowed, e.g. "door time").\n\n'
@@ -736,13 +765,25 @@ class SpawnPane(ttk.Frame):
         ttk.Checkbutton(form, text='also set 2nd map name (4a6bdb7d)', variable=self.map2).pack(side='left')
         ttk.Button(form, text="Use Link's position (mod)", command=self.from_game).pack(side='left', padx=4)
         ttk.Button(form, text='Apply to save', command=self.apply).pack(side='left', padx=4)
-        ttk.Label(self, foreground='#555', justify='left', text=(
+        self.hint = ttk.Label(self, foreground='#555', justify='left')
+        self.hint.pack(fill='x', padx=6, pady=(0, 6))
+        self.rows = []
+        self.set_hint()
+
+    def set_hint(self):
+        self.hint.config(text=(
             'Pick a map and a spawn point (list or click the top-down plot), then Apply and Save. Sets the map Link loads in '
             '(Sequence_CurrentBanc), the position and facing he loads at (PlayerStatus.SavePos / SavePosRadY) and the pause-map '
             'marker.\nThe map name also decides the age (_Child / _Adult maps). Story flags are not changed: a map can still '
             'play its own events or send you elsewhere.' if self.spawns else
-            'spawns.json missing: run  python tools/build_all.py <romfs folder>')).pack(fill='x', padx=6, pady=(0, 6))
-        self.rows = []
+            'Spawn points not built: use "Build reference data…" in the toolbar.'))
+
+    def reload(self):
+        try: self.spawns = json.load(open(SPAWNS_PATH, encoding='utf8'))
+        except (OSError, ValueError): self.spawns = {}
+        self.maps.config(values=sorted(self.spawns))
+        self.set_hint()
+        self.load()
 
     def load(self):
         s = self.app.save
@@ -866,6 +907,8 @@ class App(tk.Tk):
         ttk.Button(bar, text='Save', command=self.write).pack(side='left', padx=4)
         ttk.Button(bar, text='Save as…', command=self.write_as).pack(side='left')
         ttk.Button(bar, text='Revert', command=self.revert).pack(side='left', padx=4)
+        ttk.Button(bar, text='About', command=self.about).pack(side='right')
+        ttk.Button(bar, text='Build reference data…', command=self.build_data).pack(side='right', padx=4)
         self.status = ttk.Label(bar, text='No save loaded', foreground='#444'); self.status.pack(side='left', padx=12)
         self.nb = ttk.Notebook(self); self.nb.pack(fill='both', expand=True, padx=6, pady=(0, 6))
         self.tables = []
@@ -879,13 +922,74 @@ class App(tk.Tk):
         self.spawn = SpawnPane(self.nb, self); self.nb.add(self.spawn, text='Spawn point'); self.tables.append(self.spawn)
         self.compare = ComparePane(self.nb, self); self.nb.add(self.compare, text='Compare')
         self.explorer = Explorer(self.nb, self); self.nb.add(self.explorer, text='Triggers & events')
-        self.stats = Explorer(self.nb, self, src=ootstats, kind='Enemies', raw_text='All parameters', intro=STATS_INTRO)
+        self.stats = Explorer(self.nb, self, src=ootstats, kind='Enemies', raw_text='All parameters', intro=stats_intro)
         self.nb.add(self.stats, text='Enemies & Link stats')
         self.protocol('WM_DELETE_WINDOW', self.quit_app)
         self.bind('<Control-s>', lambda e: self.write()); self.bind('<Control-o>', lambda e: self.open())
         self.bind('<Control-f>', self.find)
         if path: self.load(path)
         elif os.path.isdir(DEFAULT_DIR): self.after(200, self.pick_slot)
+
+    def about(self):
+        info = data_info()
+        win = tk.Toplevel(self); win.title('About'); win.resizable(False, False); win.transient(self)
+        f = ttk.Frame(win, padding=16); f.pack()
+        ttk.Label(f, text=APP_NAME, font=('Segoe UI', 13, 'bold')).pack(anchor='w')
+        ttk.Label(f, text='Version %s' % APP_VERSION).pack(anchor='w')
+        ttk.Label(f, text='By %s' % APP_AUTHOR).pack(anchor='w', pady=(8, 0))
+        link = ttk.Label(f, text=APP_URL, foreground='#1d4f91', cursor='hand2')
+        link.pack(anchor='w'); link.bind('<Button-1>', lambda e: webbrowser.open(APP_URL))
+        if info:
+            game = 'Game version (reference data): %s' % info.get('game_version', 'unknown')
+            if info.get('main_build_id'): game += '\nmain build id: %s' % info['main_build_id']
+            game += '\nBuilt: %s' % info.get('built', '?')
+        else:
+            game = 'Reference data not built'
+        ttk.Label(f, text=game, justify='left').pack(anchor='w', pady=(8, 0))
+        if self.save:
+            ttk.Label(f, text='Save game data revision: %d' % self.save.version).pack(anchor='w')
+        ttk.Button(f, text='Close', command=win.destroy).pack(anchor='e', pady=(12, 0))
+
+    def build_data(self):
+        """Runs tools/build_all.py on a romfs folder with live output, then reloads the reference data."""
+        romfs = filedialog.askdirectory(title='Select the romfs folder of the game dump', mustexist=True)
+        if not romfs: return
+        if not os.path.isdir(os.path.join(romfs, 'Pack')):
+            messagebox.showerror('Build reference data', 'Not a romfs folder (no Pack folder in it):\n%s' % romfs)
+            return
+        win = tk.Toplevel(self); win.title('Building reference data'); win.geometry('640x360'); win.transient(self)
+        out = tk.Text(win, font=('Consolas', 9)); out.pack(fill='both', expand=True)
+        close = ttk.Button(win, text='Close', command=win.destroy, state='disabled'); close.pack(anchor='e', padx=6, pady=6)
+        q = queue.Queue()
+
+        def run():
+            p = subprocess.Popen([sys.executable, '-u', os.path.join(HERE, 'tools', 'build_all.py'), romfs],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf8', errors='replace',
+                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            for line in p.stdout: q.put(line)
+            q.put(None if p.wait() == 0 else 'FAILED')
+
+        def pump():
+            while not q.empty():
+                line = q.get()
+                if line is None or line == 'FAILED':
+                    out.insert('end', '\nDone.\n' if line is None else '\nBuild failed.\n'); out.see('end')
+                    close.config(state='normal')
+                    if line is None: self.reload_data()
+                    return
+                out.insert('end', line); out.see('end')
+            win.after(100, pump)
+
+        threading.Thread(target=run, daemon=True).start()
+        pump()
+
+    def reload_data(self):
+        ootrefs._cache.clear()
+        ootstats._cache.clear()
+        ootstats._CATCH = None
+        self.explorer.welcome()
+        self.stats.welcome()
+        self.spawn.reload()
 
     def find(self, e=None):
         """Ctrl+F: the find bar of a report tab (Triggers & events, stats), else the first text box of the tab."""

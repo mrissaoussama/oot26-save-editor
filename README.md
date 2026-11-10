@@ -40,7 +40,7 @@ python ootsave.py diff old.sav new.sav
 
 ## Reference data
 
-Optional. Built from your own romfs dump:
+Optional. Built from your own romfs dump with **Build reference data…** in the editor, or:
 
 ```
 python tools/build_all.py <romfs folder>
