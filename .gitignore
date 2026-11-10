@@ -1,0 +1,16 @@
+__pycache__/
+*.bak
+*.sav
+slot_*/
+
+# built from a romfs dump by tools/build_all.py
+events/
+events_plain/
+logic/
+event_index.json
+scene_index.json
+logic_rules.json
+actor_stats.json
+spawns.json
+catchable.json
+ITEM_EVENTS.md
