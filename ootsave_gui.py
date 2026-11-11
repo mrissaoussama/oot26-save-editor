@@ -5,6 +5,7 @@ import io
 import struct
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 import subprocess
 import threading
@@ -574,9 +575,12 @@ class Explorer(ttk.Frame):
 
     def put(self, text):
         self.txt.config(state='normal'); self.txt.delete('1.0', 'end')
+        cw = tkfont.Font(font=self.txt['font']).measure('0')
         for line in text.split('\n'):
-            tag = 'head' if line and not line.startswith(' ') else ''
-            self.txt.insert('end', line + '\n', tag)
+            n = len(line) - len(line.lstrip(' '))
+            ind = 'ind%d' % n
+            self.txt.tag_configure(ind, lmargin2=(n + 4) * cw)
+            self.txt.insert('end', line + '\n', ('head', ind) if line and not n else (ind,))
         self.txt.config(state='disabled')
         if self.findbar.winfo_ismapped(): self.find_all()
 

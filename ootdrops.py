@@ -122,14 +122,16 @@ def entries(table):
             for i in items:
                 w = i.get('DropProbability', 0)
                 out.append({'item': _label(i), 'count': i.get('DropCreateCount', 1),
-                            'chance': ('%d%%' % round(100.0 * w / total)) if w and total else '0% (only when low on it)',
+                            'chance': ('%d%%' % round(100.0 * w / total)) if w and total else '0% (boost only)',
                             'note': _note(i)})
         if s.get('LotteryType') == 'Max':
-            for key, rank in (('Items_Max_FirstCandidate', '1st choice'), ('Items_Max_SecondCandidate', '2nd choice'),
-                              ('Items_Max_ThirdCandidate', '3rd choice')):
+            for key, rank in (('Items_Max_FirstCandidate', 'slot 1'), ('Items_Max_SecondCandidate', 'slot 2'),
+                              ('Items_Max_ThirdCandidate', 'slot 3')):
                 c = _sub_list(s, key)
                 for i in c:
-                    out.append({'item': _label(i), 'count': i.get('DropCreateCount', 1), 'chance': rank, 'note': ''})
+                    others = [_label(x) for x in c if x is not i]
+                    out.append({'item': _label(i), 'count': i.get('DropCreateCount', 1), 'chance': rank,
+                                'note': ('slot shared with ' + ', '.join(others)) if others else ''})
     return out
 
 
@@ -248,18 +250,18 @@ def global_rules(item):
     for u in g.get('DropUnlockCondition', []):
         if item_name(u.get('Actor', '')) in names:
             n = item_name(u.get('Actor', ''))
-            out.append('%sonly drops once this flag is true: %s' % ('' if n == item else n + ': ', u.get('GameDataName')))
+            out.append('%slocked until flag %s is true' % ('' if n == item else n + ': ', u.get('GameDataName')))
     for r in g.get('ReplaceSetting', []):
         tgt = item_name(r.get('TargetActor', ''))
         if tgt not in names: continue
         rep = ', '.join('%s (%s%%)' % (item_name(x.get('ReplaceActor', '')), x.get('Probability', 100))
                         for x in r.get('ReplaceActor', []))
         c = r.get('Condition', '')
-        why = {'Unlock': 'while it is still locked (flag above false)', 'MpMax': 'when magic is full or not learned',
-               'FairyMax': 'when no empty bottle / fairies full'}.get(c, 'when %s' % (words(str(c)).lower() if c else 'always'))
+        why = {'Unlock': 'while locked', 'MpMax': 'when magic is full or not learned',
+               'FairyMax': 'when no empty bottle / fairies full'}.get(c, 'when %ss are full' % words(str(c)[:-3]).lower() if str(c).endswith('Max') else 'when %s' % words(str(c)).lower())
         if isinstance(c, int): why = 'when condition #%d' % c
-        if not c: why = '(no condition given, likely when full)'
-        out.append('%sreplaced by %s %s' % ('' if tgt == item else tgt + ': ', rep, why))
+        if not c: why = '(no condition in the data)'
+        out.append('%sbecomes %s %s' % ('' if tgt == item else tgt + ': ', rep.replace(' (100%)', ''), why))
     return out
 
 
@@ -268,12 +270,14 @@ def low_boost(item):
     rev = {item_name(TYPE_ACTOR.get(k, k)): k for k in list(TYPE_ACTOR) + ['ArrowOrSeed']}
     t = rev.get(item)
     if not t: return []
+    from ootcore import murmur3
     out = []
     for key in ('DepletedInfoData1', 'DepletedInfoData2'):
-        di = (g.get(key) or {}).get(t)
-        if not di: continue
-        lv = ', '.join('%s of %s' % (x.get('NowNum'), x.get('MaxNum')) for x in di.get('DepletedValueList', []))
-        out.append('%s: +%s%% chance when Link has at most %s' % (key[-5:], di.get('AddProbability', 0), lv or '-'))
+        tier = g.get(key) or {}
+        di = tier.get(t) or tier.get(str(murmur3(t.encode())))
+        if not di or not di.get('AddProbability') or not di.get('DepletedValueList'): continue
+        lv = ' / '.join('%s of %s' % (x.get('NowNum'), x.get('MaxNum')) for x in di['DepletedValueList'])
+        out.append('+%s%% when Link has at most %s' % (di['AddProbability'], lv))
     return out
 
 
@@ -305,37 +309,65 @@ def _group(places, limit=60):
     return sorted(by.items(), key=lambda kv: scene_name(kv[0]))[:limit]
 
 
+def _names(actors, limit=10):
+    """Actors grouped by readable name: Pot (4 variants), Crate (3 variants), Amos (enemy)."""
+    by = defaultdict(list)
+    for a in actors: by[source_name(a)].append(a)
+    parts = ['%s (%d variants)' % (n, len(v)) if len(v) > 1 else n for n, v in sorted(by.items())]
+    return ', '.join(parts[:limit]) + (', … %d more' % (len(parts) - limit) if len(parts) > limit else '')
+
+
+def _maps(places, limit=8):
+    maps = sorted({scene_name(p['scene']) for p in places})
+    return ', '.join(maps[:limit]) + (', … %d more' % (len(maps) - limit) if len(maps) > limit else '')
+
+
+def _merged(tabs):
+    rows = {}
+    for t, e in tabs:
+        r = rows.setdefault(t, {'chance': [], 'count': e['count'], 'note': []})
+        if e['chance'] not in r['chance']: r['chance'].append(e['chance'])
+        if e['note'] and e['note'] not in r['note']: r['note'].append(e['note'])
+    return sorted(rows.items())
+
+
 def item_report(item, raw=False):
-    out = [item, '']
+    out = []
     fixed = _cache['fixed'].get(item, [])
     if fixed:
-        out.append('FIXED DROPS (always this item):')
+        out.append('FIXED DROPS (always this item, no roll):')
         for p in sorted(fixed, key=lambda p: (scene_name(p['scene']), p['pos'])):
-            out.append('  %s  [%s]  in %s' % (source_name(p['actor']), p['actor'], where(p)))
+            out.append('  %s in %s   [%s]' % (source_name(p['actor']), where(p), p['actor']))
             out += ['      ' + c for c in conditions(p)]
         out.append('')
     tabs = _cache['by_item'].get(item, [])
+    boost = low_boost(item)
     if tabs:
+        d = data()
         out.append('RANDOM DROPS (drop tables that contain it):')
-        for t, e in sorted(tabs, key=lambda te: te[0]):
-            users = sorted(a for a, tl in data()['actors'].items() if tl and tl[0] == t)
+        out.append('  %      = chance this item is picked when the table rolls (one roll = one item)')
+        if any(e['chance'].startswith('slot') for _, e in tabs):
+            out.append('  slot N = "Max" table: one item per slot; a slot listing several items gives one of them')
+        if any('boost' in e['chance'] for _, e in tabs):
+            out.append('  boost only = 0% unless the low-resource boost below applies')
+        out.append('')
+        for t, r in _merged(tabs):
+            extra = (', %d at once' % r['count']) if r['count'] != 1 else ''
+            out.append('  %-38s %s%s%s' % (t, ' + '.join(r['chance']), extra,
+                                           ('   (' + '; '.join(r['note']) + ')') if r['note'] else ''))
+            users = sorted(a for a, tl in d['actors'].items() if tl and tl[0] == t)
+            alt = sorted(a for a, tl in d['actors'].items() if t in tl[1:])
             placed = _cache['by_table'].get(t, [])
-            extra = (' x%d' % e['count']) if e['count'] != 1 else ''
-            out.append('  %s   %s%s%s' % (t, e['chance'], extra, ('   ' + e['note']) if e['note'] else ''))
-            if users: out.append('      default for: ' + ', '.join('%s [%s]' % (source_name(a), a) for a in users[:12]) + (' …' if len(users) > 12 else ''))
-            if placed:
-                maps = sorted({scene_name(p['scene']) for p in placed})
-                out.append('      placed: %d in %s' % (len(placed), ', '.join(maps[:10]) + (' …' if len(maps) > 10 else '')))
+            if users: out.append('      default for: ' + _names(users))
+            if alt: out.append('      optional for: ' + _names(alt))
+            if placed: out.append('      placed %d times: %s' % (len(placed), _maps(placed)))
+            if not (users or alt or placed): out.append('      no actor or placement uses it (may be picked by game code)')
         out.append('')
     g = global_rules(item)
-    if g:
-        out.append('CONDITIONS (all random drops):')
+    if g or (tabs and boost):
+        out.append('RULES (global drop settings, apply to the random drops above):')
         out += ['  ' + x for x in g]
-        out.append('')
-    lb = low_boost(item)
-    if lb:
-        out.append('LOW-RESOURCE BOOST:')
-        out += ['  ' + x for x in lb]
+        if tabs: out += ['  low-resource boost: ' + x for x in boost]
         out.append('')
     if not fixed and not tabs: out.append('No drops found.')
     out.append('Double-click a table, actor or flag name to open it.')
